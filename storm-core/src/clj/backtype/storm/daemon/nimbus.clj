@@ -34,6 +34,7 @@
             KillOptions RebalanceOptions ClusterSummary SupervisorSummary TopologySummary TopologyInfo
             ExecutorSummary AuthorizationException GetInfoOptions NumErrorsChoice])
   (:import [backtype.storm.daemon Shutdownable])
+  (:import [backtype.storm.autoscale AutoScalerManager])
   (:use [backtype.storm util config log timer])
   (:require [backtype.storm [cluster :as cluster] [stats :as stats]])
   (:require [clojure.set :as set])
@@ -1081,6 +1082,7 @@
                                 storm-conf
                                 (dissoc storm-conf STORM-ZOOKEEPER-TOPOLOGY-AUTH-SCHEME STORM-ZOOKEEPER-TOPOLOGY-AUTH-PAYLOAD))
                 total-storm-conf (merge conf storm-conf)
+                topology (AutoScalerManager/configureTopology storm-name storm-id uploadedJarLocation total-storm-conf topology)
                 topology (normalize-topology total-storm-conf topology)
 
                 storm-cluster-state (:storm-cluster-state nimbus)]

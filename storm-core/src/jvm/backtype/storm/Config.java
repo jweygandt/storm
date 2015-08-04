@@ -1309,6 +1309,12 @@ public class Config extends HashMap<String, Object> {
     public static final Object TOPOLOGY_LOGGING_SENSITIVITY_SCHEMA = String.class;
 
     /**
+     * Max pending tuples in one ShellBolt
+     */
+    public static final String TOPOLOGY_AUTO_SCALER="topology.auto-scaler";
+    public static final Object TOPOLOGY_AUTO_SCALER_SCHEMA = String.class;
+
+    /**
      * The root directory in ZooKeeper for metadata about TransactionalSpouts.
      */
     public static final String TRANSACTIONAL_ZOOKEEPER_ROOT="transactional.zookeeper.root";
