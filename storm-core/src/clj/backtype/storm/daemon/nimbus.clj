@@ -718,6 +718,8 @@
                                                  executor->node+port
                                                  start-times)}))]
 
+    (AutoScalerManager/checkinOnTopologies (concat assigned-topology-ids (keys new-assignments)))
+      
     ;; tasks figure out what tasks to talk to by looking at topology at runtime
     ;; only log/set when there's been a change to the assignment
     (doseq [[topology-id assignment] new-assignments
@@ -1373,6 +1375,7 @@
                                                   (.shutdown service-handler)
                                                   (.stop server)))
     (log-message "Starting Nimbus server...")
+    (AutoScalerManager/setNimbus service-handler)
     (.serve server)
     service-handler))
 
@@ -1419,5 +1422,10 @@
     ))
 
 (defn -main []
-  (setup-default-uncaught-exception-handler)
-  (-launch (standalone-nimbus)))
+  (try
+    (do
+      (setup-default-uncaught-exception-handler)
+      (-launch (standalone-nimbus)))
+    (catch Throwable t
+      (prn "Error:" t)
+      (.printStackTrace t))))
