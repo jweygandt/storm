@@ -15,7 +15,7 @@
 ;; limitations under the License.
 (ns backtype.storm.converter
   (:import [backtype.storm.generated SupervisorInfo NodeInfo Assignment
-            StormBase TopologyStatus ClusterWorkerHeartbeat ExecutorInfo ErrorInfo Credentials RebalanceOptions KillOptions TopologyActionOptions])
+            StormBase TopologyStatus ClusterWorkerHeartbeat ExecutorInfo ErrorInfo Credentials RebalanceOptions BounceOptions KillOptions TopologyActionOptions])
   (:use [backtype.storm util stats log])
   (:require [backtype.storm.daemon [common :as common]]))
 
@@ -83,6 +83,7 @@
     TopologyStatus/INACTIVE {:type :inactive}
     TopologyStatus/REBALANCING {:type :rebalancing}
     TopologyStatus/KILLED {:type :killed}
+    TopologyStatus/BOUNCING {:type :bouncing}
     nil))
 
 (defn- convert-to-status-from-symbol [status]
@@ -92,6 +93,7 @@
       :inactive TopologyStatus/INACTIVE
       :rebalancing TopologyStatus/REBALANCING
       :killed TopologyStatus/KILLED
+      :bouncing TopologyStatus/BOUNCING
       nil)))
 
 (defn clojurify-rebalance-options [^RebalanceOptions rebalance-options]
@@ -110,6 +112,20 @@
       (if (:component->executors rebalance-options)
         (.set_num_executors thrift-rebalance-options (map-val int (:component->executors rebalance-options))))
       thrift-rebalance-options)))
+
+(defn clojurify-bounce-options [^BounceOptions bounce-options]
+  (-> {:action :bounce}
+    (assoc-non-nil :step1-delay-secs (if (.is_set_step1_wait_secs bounce-options) (.get_step1_wait_secs bounce-options)))
+    (assoc-non-nil :step2-delay-secs (if (.is_set_step2_wait_secs bounce-options) (.get_step2_wait_secs bounce-options)))))
+
+(defn thriftify-bounce-options [bounce-options]
+  (if bounce-options
+    (let [thrift-bounce-options (BounceOptions.)]
+      (if (:step1-delay-secs bounce-options)
+        (.set_step1_wait_secs thrift-bounce-options (int (:step1-delay-secs bounce-options))))
+      (if (:step2-delay-secs bounce-options)
+        (.set_step2_wait_secs thrift-bounce-options (int (:step2-delay-secs bounce-options))))
+      thrift-bounce-options)))
 
 (defn clojurify-kill-options [^KillOptions kill-options]
   (-> {:action :kill}
@@ -131,6 +147,8 @@
         (.set_kill_options thrift-topology-action-options (thriftify-kill-options topology-action-options)))
       (if (= action :rebalance)
         (.set_rebalance_options thrift-topology-action-options (thriftify-rebalance-options topology-action-options)))
+      (if (= action :bounce)
+        (.set_bounce_options thrift-topology-action-options (thriftify-bounce-options topology-action-options)))
       thrift-topology-action-options)))
 
 (defn clojurify-topology-action-options [^TopologyActionOptions topology-action-options]
@@ -140,7 +158,10 @@
                (.get_kill_options topology-action-options)))
         (and (.is_set_rebalance_options topology-action-options)
              (clojurify-rebalance-options
-               (.get_rebalance_options topology-action-options))))))
+               (.get_rebalance_options topology-action-options)))
+        (and (.is_set_bounce_options topology-action-options)
+             (clojurify-bounce-options
+               (.get_bounce_options topology-action-options))))))
 
 (defn thriftify-storm-base [storm-base]
   (doto (StormBase.)

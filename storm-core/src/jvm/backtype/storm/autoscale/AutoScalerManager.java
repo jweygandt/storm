@@ -44,28 +44,97 @@ public class AutoScalerManager {
 	private static Map<String, IAutoScaler> autoScalersByName = new HashMap<>();
 	private static BiMap<String, String> nameToId = HashBiMap.create();
 
+	/**
+	 * @param nimbus A handle to the Nimbus.Iface for the running process.
+	 */
 	public static synchronized void setNimbus(Nimbus.Iface nimbus) {
 		_nimbus = nimbus;
 	}
 
 	/**
-	 * Take the current topology, and enhance it with all the auto-scale'ed
-	 * configuration. If an auto-scaler parameter is defined for stormName, it
-	 * will be started. Following that a call to IAutoScaler.configureTopology()
-	 * will be made.
+	 * Initialize the auto scaler. This can (and should) be called before the
+	 * toplogy is actually started. It can then be followed by
+	 * modifyConfigAndTopology.
 	 * 
 	 * @param stormName
 	 * @param stormId
-	 * @param uploadedJarLocation
 	 * @param totalStormConf
+	 */
+	public static synchronized void initializeAutoScaler(String stormName, String stormId,
+			@SuppressWarnings("rawtypes") Map totalStormConf) {
+		// must be a restart, get info and get config
+		IAutoScaler autoscaler = autoScalersByName.get(stormName);
+		if (autoscaler != null && autoscaler.isRunning()) {
+			// This should never have happened
+			// With no id, but autoscaler cached, one should
+			// have todeploy first
+			throw new IllegalStateException("sormId: " + stormId);
+		}
+		makeAndStartAutoScaler(stormName, stormId, totalStormConf);
+	}
+
+	/**
+	 * Modify the configuration and toplogy.
+	 * 
+	 * @param stormId
+	 * @param stormConf
 	 * @param topology
 	 * @return
 	 */
-	public static synchronized StormTopology configureTopology(String stormName, String stormId,
-			String uploadedJarLocation, @SuppressWarnings("rawtypes") Map totalStormConf, StormTopology topology) {
-		IAutoScaler autoScaler = makeAndStartAutoScaler(stormName, stormId, totalStormConf, topology);
+	@SuppressWarnings({ "rawtypes" })
+	public static synchronized Object[] modifyConfigAndTopology(String stormId, Map stormConf, StormTopology topology) {
 
-		return autoScaler.configureTopology(stormName, stormId, totalStormConf, topology);
+		if (hasAutoScalerById(stormId)) {
+			IAutoScaler autoScaler = autoScalersByName.get(nameToId.inverse().get(stormId));
+			return autoScaler.modifyConfigAndTopology(stormId, stormConf, topology);
+		} else {
+			return new Object[] { stormConf, topology };
+		}
+	}
+
+	/**
+	 * Determine if the topology has an autoscaler. This will also start up the
+	 * autoscaler if it is not running. The stormId should represent a running
+	 * topology, as calls will be made to nimbus to determine topology
+	 * information.
+	 * 
+	 * @param stormId
+	 * @return
+	 */
+	public static synchronized boolean hasAutoScalerById(String stormId) {
+		String stormName = nameToId.inverse().get(stormId);
+		if (stormName == null) {
+			checkinOnTopology(stormId);
+			stormName = nameToId.inverse().get(stormId);
+		}
+		return autoScalersByName.get(stormName) != IAutoScaler.NONE;
+	}
+
+	/**
+	 * Stop the auto scaler.
+	 * 
+	 * @param stormName
+	 */
+	public static synchronized void stopAutoScalerByName(String stormName) {
+		IAutoScaler autoScaler = autoScalersByName.get(stormName);
+		if (autoScaler != null) {
+			nameToId.remove(stormName);
+			autoScaler.stopAutoScaler();
+		}
+	}
+
+	/**
+	 * Stop the auto scaler.
+	 * 
+	 * @param stormId
+	 */
+	public static synchronized void stopAutoScalerById(String stormId) {
+		String stormName = nameToId.inverse().get(stormId);
+		IAutoScaler autoScaler = autoScalersByName.get(stormName);
+		if (autoScaler != null) {
+			nameToId.remove(stormName);
+			autoScaler.stopAutoScaler();
+		}
 	}
 
 	/**
@@ -77,6 +146,10 @@ public class AutoScalerManager {
 	 * Since the AutoScaler will "never die" during Nimbus's normal operation,
 	 * it is not necessary for this method to continuously check to see if it is
 	 * running.
+	 * 
+	 * @param stormIds
+	 *            BE SURE THIS IS A COMPLETE LIST, autoscalers for topologies
+	 *            not on this list will be cleaned up.
 	 */
 	public static synchronized void checkinOnTopologies(Collection<String> stormIds) {
 		// first lets see if any have stopped
@@ -94,42 +167,45 @@ public class AutoScalerManager {
 			nameToId.remove(stormName);
 		}
 
-		// now lets see if any are running we don't know about
+		// now lets see if any topologies are running we don't have an
+		// autoscaler for
 		for (String stormId : stormIds) {
-			String stormName = nameToId.inverse().get(stormId);
-			if (stormName == null) {
-				// must be a restart, get info and get config
-				try {
-					TopologyInfo tinfo = _nimbus.getTopologyInfo(stormId);
-					stormName = tinfo.get_name();
+			checkinOnTopology(stormId);
+		}
+	}
 
-					IAutoScaler autoscaler = autoScalersByName.get(stormName);
-					if (autoscaler != null) {
-						// This should never have happened
-						// With no id, but autoscaler cached, one should
-						// have to
-						// deploy first
-						throw new IllegalStateException("sormId: " + stormId);
-					}
+	private static void checkinOnTopology(String stormId) {
+		String stormName = nameToId.inverse().get(stormId);
+		if (stormName == null) {
+			// must be a restart, get info and get config
+			try {
+				TopologyInfo tinfo = _nimbus.getTopologyInfo(stormId);
+				stormName = tinfo.get_name();
 
-					JSONObject totalStormConf = (JSONObject) JSONValue.parse(_nimbus.getTopologyConf(stormId));
-					makeAndStartAutoScaler(stormName, stormId, totalStormConf, null);
-				} catch (ClassCastException | TException e) {
-					// Really, this should never happen, but if it does log
-					// and
-					// continue, as it is not "standard" topo
-					nameToId.put(stormName, stormId);
-					autoScalersByName.put(stormName, IAutoScaler.NONE);
-					Log.error("Should not have happend, ignoring: " + e.getLocalizedMessage(), e);
+				IAutoScaler autoscaler = autoScalersByName.get(stormName);
+				if (autoscaler != null) {
+					// This should never have happened
+					// With no id, but autoscaler cached, one should
+					// have to
+					// deploy first
+					throw new IllegalStateException("sormId: " + stormId);
 				}
+
+				JSONObject totalStormConf = (JSONObject) JSONValue.parse(_nimbus.getTopologyConf(stormId));
+				makeAndStartAutoScaler(stormName, stormId, totalStormConf);
+			} catch (ClassCastException | TException e) {
+				// Really, this should never happen, but if it does log
+				// and
+				// continue, as it is not "standard" topo
+				nameToId.put(stormName, stormId);
+				autoScalersByName.put(stormName, IAutoScaler.NONE);
+				Log.error("Should not have happend, ignoring: " + e.getLocalizedMessage(), e);
 			}
 		}
 	}
 
-	// topology is a flag, to indicate a new deployment, if not null - else
-	// reload and restart, ugly, but lots of shared code
 	private static IAutoScaler makeAndStartAutoScaler(String stormName, String stormId,
-			@SuppressWarnings("rawtypes") Map totalStormConf, StormTopology topology) {
+			@SuppressWarnings("rawtypes") Map totalStormConf) {
 		String autoScalerClassName = (String) totalStormConf.get(Config.TOPOLOGY_AUTO_SCALER);
 		IAutoScaler autoScaler;
 		if (autoScalerClassName == null) {
@@ -153,10 +229,7 @@ public class AutoScalerManager {
 
 				try {
 					autoScaler = (IAutoScaler) Class.forName(autoScalerClassName).newInstance();
-					if (topology != null)
-						autoScaler.startAutoScaler(_nimbus, datadir, stormName, stormId, totalStormConf, topology);
-					else
-						autoScaler.reLoadAndReStartAutoScaler(_nimbus, datadir, stormName, stormId, totalStormConf);
+					autoScaler.reLoadAndReStartAutoScaler(_nimbus, datadir, stormName, stormId, totalStormConf);
 					autoScalersByName.put(stormName, autoScaler);
 					nameToId.put(stormName, stormId);
 				} catch (InstantiationException | IllegalAccessException | ClassNotFoundException e) {
@@ -166,13 +239,8 @@ public class AutoScalerManager {
 							e);
 				}
 			} else {
-				if (topology != null) {
-					autoScaler.startAutoScaler(_nimbus, datadir, stormName, stormId, totalStormConf, topology);
-					nameToId.put(stormName, stormId);
-				} else {
-					autoScaler.reLoadAndReStartAutoScaler(_nimbus, datadir, stormName, stormId, totalStormConf);
-					nameToId.put(stormName, stormId);
-				}
+				autoScaler.reLoadAndReStartAutoScaler(_nimbus, datadir, stormName, stormId, totalStormConf);
+				nameToId.put(stormName, stormId);
 			}
 		}
 		return autoScaler;

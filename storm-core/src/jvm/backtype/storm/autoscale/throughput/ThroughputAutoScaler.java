@@ -20,16 +20,19 @@ import org.slf4j.LoggerFactory;
 
 import backtype.storm.autoscale.IAutoScaler;
 import backtype.storm.generated.Bolt;
+import backtype.storm.generated.BounceOptions;
 import backtype.storm.generated.ComponentCommon;
 import backtype.storm.generated.GlobalStreamId;
 import backtype.storm.generated.Grouping;
 import backtype.storm.generated.Nimbus.Iface;
 import backtype.storm.generated.NotAliveException;
+import backtype.storm.generated.RebalanceOptions;
 import backtype.storm.generated.SpoutSpec;
 import backtype.storm.generated.StateSpoutSpec;
 import backtype.storm.generated.StormTopology;
 import backtype.storm.generated.StreamInfo;
 import backtype.storm.generated.TopologyInfo;
+import clojure.lang.IPersistentMap;
 
 /**
  * An auto-scale algorithm designed to manage the topology primarily by
@@ -40,9 +43,14 @@ public class ThroughputAutoScaler implements IAutoScaler {
 
 	private static class PersistentData implements Serializable {
 
+		private static final long serialVersionUID = 1L;
+
 	}
 
+	private static int bouncecnt = 0;
+
 	private final class MonitorThread extends Thread {
+
 		private MonitorThread(String arg0) {
 			super(arg0);
 		}
@@ -53,14 +61,23 @@ public class ThroughputAutoScaler implements IAutoScaler {
 				while (!done) {
 					try {
 
-						// Note: one may access the member variables of ThroughputAutoScaler without synchronization.
-						// However!! When accessing "PersistentData data" - synchronize on data!
-						
+						// Note: one may access the member variables of
+						// ThroughputAutoScaler without synchronization.
+						// However!! When accessing "PersistentData data" -
+						// synchronize on data!
+
 						try {
 							// get from config
-							Thread.sleep(10000);
+							Thread.sleep(5000);
 						} catch (Exception e) {
 							continue;
+						}
+
+						if (bouncecnt++ == 0) {
+							BounceOptions options = new BounceOptions();
+							options.set_step1_wait_secs(1);
+							options.set_step2_wait_secs(10);
+							_nimbus.bounce(_stormName, options);
 						}
 
 						writePersistentData();
@@ -117,21 +134,24 @@ public class ThroughputAutoScaler implements IAutoScaler {
 	private volatile boolean done;
 	private MonitorThread autoscaler = null;
 
-	@Override
-	public synchronized void startAutoScaler(Iface nimbus, File datadir, String stormName, String stormId,
-			@SuppressWarnings("rawtypes") Map totalStormConf, StormTopology topology) {
-
-		_datadir = datadir;
-		_nimbus = nimbus;
-		_stormName = stormName;
-		_stormId = stormId;
-		done = false;
-		readPersistentData(true);
-
-		autoscaler = new MonitorThread(this.getClass().getSimpleName() + "-" + stormName);
-		autoscaler.start();
-	}
-
+	// @Override
+	// public synchronized void startAutoScaler(Iface nimbus, File datadir,
+	// String stormName, String stormId,
+	// @SuppressWarnings("rawtypes") Map totalStormConf, StormTopology topology)
+	// {
+	//
+	// _datadir = datadir;
+	// _nimbus = nimbus;
+	// _stormName = stormName;
+	// _stormId = stormId;
+	// done = false;
+	// readPersistentData(true);
+	//
+	// autoscaler = new MonitorThread(this.getClass().getSimpleName() + "-" +
+	// stormName);
+	// autoscaler.start();
+	// }
+	//
 	@Override
 	public synchronized void reLoadAndReStartAutoScaler(Iface nimbus, File datadir, String stormName, String stormId,
 			@SuppressWarnings("rawtypes") Map totalStormConf) {
@@ -140,7 +160,7 @@ public class ThroughputAutoScaler implements IAutoScaler {
 		_stormName = stormName;
 		_stormId = stormId;
 		done = false;
-		readPersistentData(false);
+		readPersistentData(true);
 
 		autoscaler = new MonitorThread(this.getClass().getSimpleName() + "-" + stormName);
 		autoscaler.start();
@@ -156,18 +176,35 @@ public class ThroughputAutoScaler implements IAutoScaler {
 	}
 
 	@Override
-	public synchronized StormTopology configureTopology(String stormName, String stormId,
-			@SuppressWarnings("rawtypes") Map totalStormConf, StormTopology topology) {
+	public boolean isRunning() {
+		return !done;
+	}
+
+	private static int callcnt = 1;
+
+	@Override
+	public Object[] modifyConfigAndTopology(String stormId, @SuppressWarnings("rawtypes") Map stormConf,
+			StormTopology topology) {
 
 		// Make a mutable copy
 		topology = topology.deepCopy();
 
-		// Note! When you access data in "PersistentData data" please synchronize on "data"
-		
+		// Note! When you access data in "PersistentData data" please
+		// synchronize on "data"
+		int newval = callcnt++;
+
 		LOG.info("Spouts:");
 		for (Entry<String, SpoutSpec> ent : topology.get_spouts().entrySet()) {
+
 			SpoutSpec spec = ent.getValue();
-			LOG.info("  " + ent.getKey() + " " + spec.get_spout_object().getSetField());
+			String name = ent.getKey();
+
+			if (name.equals("spout1")) {
+				spec.get_common().set_parallelism_hint(newval);
+				spec.get_common().set_json_conf("{\"topology.tasks\" : " + newval + "}");
+			}
+
+			LOG.info("  " + name + " " + spec.get_spout_object().getSetField());
 			ComponentCommon cc = spec.get_common();
 			LOG.info("    " + "Parallelism : " + cc.get_parallelism_hint());
 			LOG.info("    " + "Inputs");
@@ -184,7 +221,14 @@ public class ThroughputAutoScaler implements IAutoScaler {
 		LOG.info("Bolts:");
 		for (Entry<String, Bolt> ent : topology.get_bolts().entrySet()) {
 			Bolt spec = ent.getValue();
-			LOG.info("  " + ent.getKey() + " " + spec.get_bolt_object().getSetField());
+			String name = ent.getKey();
+
+			if (name.equals("bolt1")) {
+				spec.get_common().set_parallelism_hint(newval);
+				spec.get_common().set_json_conf("{\"topology.tasks\" : " + newval + "}");
+			}
+
+			LOG.info("  " + name + " " + spec.get_bolt_object().getSetField());
 			ComponentCommon cc = spec.get_common();
 			LOG.info("    " + "Parallelism : " + cc.get_parallelism_hint());
 			LOG.info("    " + "Inputs");
@@ -215,7 +259,8 @@ public class ThroughputAutoScaler implements IAutoScaler {
 			LOG.info("    " + "JSON Config : " + cc.get_json_conf());
 		}
 
-		return topology;
+		IPersistentMap newConf = ((IPersistentMap) stormConf).assoc("topology.workers", newval);
+		return new Object[] { newConf, topology };
 	}
 
 	// do the best to write data

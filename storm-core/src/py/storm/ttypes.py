@@ -53,12 +53,14 @@ class TopologyStatus:
   INACTIVE = 2
   REBALANCING = 3
   KILLED = 4
+  BOUNCING = 5
 
   _VALUES_TO_NAMES = {
     1: "ACTIVE",
     2: "INACTIVE",
     3: "REBALANCING",
     4: "KILLED",
+    5: "BOUNCING",
   }
 
   _NAMES_TO_VALUES = {
@@ -66,6 +68,7 @@ class TopologyStatus:
     "INACTIVE": 2,
     "REBALANCING": 3,
     "KILLED": 4,
+    "BOUNCING": 5,
   }
 
 class NumErrorsChoice:
@@ -2365,10 +2368,10 @@ class SupervisorSummary:
     (3, TType.I32, 'num_workers', None, None, ), # 3
     (4, TType.I32, 'num_used_workers', None, None, ), # 4
     (5, TType.STRING, 'supervisor_id', None, None, ), # 5
-    (6, TType.STRING, 'version', None, None, ), # 6
+    (6, TType.STRING, 'version', None, "VERSION_NOT_PROVIDED", ), # 6
   )
 
-  def __init__(self, host=None, uptime_secs=None, num_workers=None, num_used_workers=None, supervisor_id=None, version=None,):
+  def __init__(self, host=None, uptime_secs=None, num_workers=None, num_used_workers=None, supervisor_id=None, version=thrift_spec[6][4],):
     self.host = host
     self.uptime_secs = uptime_secs
     self.num_workers = num_workers
@@ -2463,8 +2466,6 @@ class SupervisorSummary:
       raise TProtocol.TProtocolException(message='Required field num_used_workers is unset!')
     if self.supervisor_id is None:
       raise TProtocol.TProtocolException(message='Required field supervisor_id is unset!')
-    if self.version is None:
-      raise TProtocol.TProtocolException(message='Required field version is unset!')
     return
 
 
@@ -4427,6 +4428,84 @@ class RebalanceOptions:
   def __ne__(self, other):
     return not (self == other)
 
+class BounceOptions:
+  """
+  Attributes:
+   - step1_wait_secs
+   - step2_wait_secs
+  """
+
+  thrift_spec = (
+    None, # 0
+    (1, TType.I32, 'step1_wait_secs', None, None, ), # 1
+    (2, TType.I32, 'step2_wait_secs', None, None, ), # 2
+  )
+
+  def __init__(self, step1_wait_secs=None, step2_wait_secs=None,):
+    self.step1_wait_secs = step1_wait_secs
+    self.step2_wait_secs = step2_wait_secs
+
+  def read(self, iprot):
+    if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
+      fastbinary.decode_binary(self, iprot.trans, (self.__class__, self.thrift_spec))
+      return
+    iprot.readStructBegin()
+    while True:
+      (fname, ftype, fid) = iprot.readFieldBegin()
+      if ftype == TType.STOP:
+        break
+      if fid == 1:
+        if ftype == TType.I32:
+          self.step1_wait_secs = iprot.readI32();
+        else:
+          iprot.skip(ftype)
+      elif fid == 2:
+        if ftype == TType.I32:
+          self.step2_wait_secs = iprot.readI32();
+        else:
+          iprot.skip(ftype)
+      else:
+        iprot.skip(ftype)
+      iprot.readFieldEnd()
+    iprot.readStructEnd()
+
+  def write(self, oprot):
+    if oprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and self.thrift_spec is not None and fastbinary is not None:
+      oprot.trans.write(fastbinary.encode_binary(self, (self.__class__, self.thrift_spec)))
+      return
+    oprot.writeStructBegin('BounceOptions')
+    if self.step1_wait_secs is not None:
+      oprot.writeFieldBegin('step1_wait_secs', TType.I32, 1)
+      oprot.writeI32(self.step1_wait_secs)
+      oprot.writeFieldEnd()
+    if self.step2_wait_secs is not None:
+      oprot.writeFieldBegin('step2_wait_secs', TType.I32, 2)
+      oprot.writeI32(self.step2_wait_secs)
+      oprot.writeFieldEnd()
+    oprot.writeFieldStop()
+    oprot.writeStructEnd()
+
+  def validate(self):
+    return
+
+
+  def __hash__(self):
+    value = 17
+    value = (value * 31) ^ hash(self.step1_wait_secs)
+    value = (value * 31) ^ hash(self.step2_wait_secs)
+    return value
+
+  def __repr__(self):
+    L = ['%s=%r' % (key, value)
+      for key, value in self.__dict__.iteritems()]
+    return '%s(%s)' % (self.__class__.__name__, ', '.join(L))
+
+  def __eq__(self, other):
+    return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
+  def __ne__(self, other):
+    return not (self == other)
+
 class Credentials:
   """
   Attributes:
@@ -5031,17 +5110,20 @@ class TopologyActionOptions:
   Attributes:
    - kill_options
    - rebalance_options
+   - bounce_options
   """
 
   thrift_spec = (
     None, # 0
     (1, TType.STRUCT, 'kill_options', (KillOptions, KillOptions.thrift_spec), None, ), # 1
     (2, TType.STRUCT, 'rebalance_options', (RebalanceOptions, RebalanceOptions.thrift_spec), None, ), # 2
+    (3, TType.STRUCT, 'bounce_options', (BounceOptions, BounceOptions.thrift_spec), None, ), # 3
   )
 
-  def __init__(self, kill_options=None, rebalance_options=None,):
+  def __init__(self, kill_options=None, rebalance_options=None, bounce_options=None,):
     self.kill_options = kill_options
     self.rebalance_options = rebalance_options
+    self.bounce_options = bounce_options
 
   def read(self, iprot):
     if iprot.__class__ == TBinaryProtocol.TBinaryProtocolAccelerated and isinstance(iprot.trans, TTransport.CReadableTransport) and self.thrift_spec is not None and fastbinary is not None:
@@ -5064,6 +5146,12 @@ class TopologyActionOptions:
           self.rebalance_options.read(iprot)
         else:
           iprot.skip(ftype)
+      elif fid == 3:
+        if ftype == TType.STRUCT:
+          self.bounce_options = BounceOptions()
+          self.bounce_options.read(iprot)
+        else:
+          iprot.skip(ftype)
       else:
         iprot.skip(ftype)
       iprot.readFieldEnd()
@@ -5082,6 +5170,10 @@ class TopologyActionOptions:
       oprot.writeFieldBegin('rebalance_options', TType.STRUCT, 2)
       self.rebalance_options.write(oprot)
       oprot.writeFieldEnd()
+    if self.bounce_options is not None:
+      oprot.writeFieldBegin('bounce_options', TType.STRUCT, 3)
+      self.bounce_options.write(oprot)
+      oprot.writeFieldEnd()
     oprot.writeFieldStop()
     oprot.writeStructEnd()
 
@@ -5093,6 +5185,7 @@ class TopologyActionOptions:
     value = 17
     value = (value * 31) ^ hash(self.kill_options)
     value = (value * 31) ^ hash(self.rebalance_options)
+    value = (value * 31) ^ hash(self.bounce_options)
     return value
 
   def __repr__(self):

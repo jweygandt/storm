@@ -31,7 +31,7 @@
             BufferFileInputStream])
   (:import [backtype.storm.generated NotAliveException AlreadyAliveException StormTopology ErrorInfo
             ExecutorInfo InvalidTopologyException Nimbus$Iface Nimbus$Processor SubmitOptions TopologyInitialStatus
-            KillOptions RebalanceOptions ClusterSummary SupervisorSummary TopologySummary TopologyInfo
+            KillOptions RebalanceOptions BounceOptions ClusterSummary SupervisorSummary TopologySummary TopologyInfo
             ExecutorSummary AuthorizationException GetInfoOptions NumErrorsChoice])
   (:import [backtype.storm.daemon Shutdownable])
   (:import [backtype.storm.autoscale AutoScalerManager])
@@ -158,16 +158,94 @@
           (assoc-non-nil :num-workers (:num-workers rebalance-options)))))
   (mk-assignments nimbus :scratch-topology-id storm-id))
 
+(declare read-storm-topology)
+(declare validate-topology-size)
+(declare start-storm)
+
+(defn- stash-stormdist-run-auto-scaler [conf storm-name old-storm-id new-storm-id]
+  (let [old-stormroot (master-stormdist-root conf old-storm-id)
+        new-stormstash (master-stormtopopersist-root conf storm-name new-storm-id)
+        storm-conf (read-storm-conf conf old-storm-id)
+        topology (read-storm-topology conf old-storm-id)
+        storm-jar-path (master-stormjar-path old-stormroot)
+        [storm-conf topology] (AutoScalerManager/modifyConfigAndTopology old-storm-id storm-conf topology)]
+    (log-message "nimbus file locations:" old-stormroot " " new-stormstash)
+    (system-topology! storm-conf topology)
+    (validate-topology-size storm-conf conf topology)
+    (FileUtils/forceMkdir (File. new-stormstash))
+    (FileUtils/cleanDirectory (File. new-stormstash))
+    (FileUtils/copyFileToDirectory (File. storm-jar-path) (File. new-stormstash))
+    (FileUtils/writeByteArrayToFile (File. (master-stormcode-path new-stormstash)) (Utils/serialize topology))
+    (FileUtils/writeByteArrayToFile (File. (master-stormconf-path new-stormstash)) (Utils/toCompressedJsonConf storm-conf))
+    (list storm-conf topology)))
+
+(defn bounce-transition [nimbus storm-id status storm-base]
+  (fn [step1_wait-amt step2_wait-amt]
+    (let [delay1 (if step1_wait-amt
+                   step1_wait-amt
+                   (get (read-storm-conf (:conf nimbus) storm-id)
+                        TOPOLOGY-MESSAGE-TIMEOUT-SECS))
+          delay2 (if step2_wait-amt
+                   step2_wait-amt
+                   (get (read-storm-conf (:conf nimbus) storm-id)
+                        TOPOLOGY-MESSAGE-TIMEOUT-SECS))
+          conf (:conf nimbus)
+          storm-name (:storm-name storm-base)
+          new-storm-id (str storm-name "-stash")]
+      (log-message "Bouncing Step 1 " storm-id " stash id " + new-storm-id)
+      (delay-event nimbus
+                   storm-id
+                   delay1
+                   :do-bounce)
+      (stash-stormdist-run-auto-scaler conf storm-name storm-id new-storm-id)
+      {
+       :status {:type :bouncing}
+       :prev-status status
+       :topology-action-options {:step2-delay-secs delay2 :step1-delay-secs delay1 :action :bounce}})))
+
+(defn do-bounce [nimbus old-storm-id status old-storm-base]
+  (fn []
+    (log-message "Bouncing Step 2 " old-storm-id)
+    (let [delay-secs (-> old-storm-base
+                       :topology-action-options
+                       :step2-delay-secs)
+          conf (:conf nimbus)
+          storm-name (:storm-name old-storm-base)
+          stash-storm-id (str storm-name "-stash")
+          _ (swap! (:submitted-count nimbus) inc)
+          new-storm-id (str storm-name "-" @(:submitted-count nimbus) "-" (current-time-secs))]
+
+      (AutoScalerManager/stopAutoScalerByName storm-name)
+      (.remove-storm! (:storm-cluster-state nimbus) old-storm-id)
+      
+      (log-message "Delaying restart for " delay-secs " secs for " new-storm-id)
+      (schedule (:timer nimbus)
+                delay-secs
+                (fn []
+                  (let [new-stormstash (master-stormtopopersist-root conf storm-name stash-storm-id)
+                        new-stormroot (master-stormdist-root conf new-storm-id)
+                        _ (FileUtils/moveDirectory (File. new-stormstash) (File. new-stormroot))
+                        totalStormConf (merge conf (read-storm-conf conf new-storm-id))]
+                    (log-message "Bouncing Step 3 " new-storm-id)
+                    (AutoScalerManager/initializeAutoScaler storm-name new-storm-id totalStormConf)
+                    (start-storm nimbus storm-name new-storm-id (:type (:prev-status old-storm-base)))
+                    (mk-assignments nimbus)
+                  )))
+
+      nil)))
+
 (defn state-transitions [nimbus storm-id status storm-base]
   {:active {:inactivate :inactive
             :activate nil
             :rebalance (rebalance-transition nimbus storm-id status)
             :kill (kill-transition nimbus storm-id)
+            :bounce (bounce-transition nimbus storm-id status storm-base)
             }
    :inactive {:activate :active
               :inactivate nil
               :rebalance (rebalance-transition nimbus storm-id status)
               :kill (kill-transition nimbus storm-id)
+              :bounce (bounce-transition nimbus storm-id status storm-base)
               }
    :killed {:startup (fn [] (delay-event nimbus
                                          storm-id
@@ -179,6 +257,7 @@
             :kill (kill-transition nimbus storm-id)
             :remove (fn []
                       (log-message "Killing topology: " storm-id)
+                      (AutoScalerManager/stopAutoScalerById storm-id)
                       (.remove-storm! (:storm-cluster-state nimbus)
                                       storm-id)
                       nil)
@@ -194,7 +273,17 @@
                  :do-rebalance (fn []
                                  (do-rebalance nimbus storm-id status storm-base)
                                  (:type (:prev-status storm-base)))
-                 }})
+                 }
+   :bouncing {:startup (fn [] (delay-event nimbus
+                                           storm-id
+                                           (-> storm-base
+                                             :topology-action-options
+                                             :step1-delay-secs)
+                                           :do-bounce)
+                         nil)
+              :kill (kill-transition nimbus storm-id)
+              :do-bounce  (do-bounce  nimbus storm-id status storm-base)
+              }})
 
 (defn transition!
   ([nimbus storm-id event]
@@ -321,15 +410,20 @@
       [(.getNodeId slot) (.getPort slot)]
       )))
 
+(declare validate-topology-size)
+
 (defn- setup-storm-code [conf storm-id tmp-jar-location storm-conf topology]
   (let [stormroot (master-stormdist-root conf storm-id)]
    (log-message "nimbus file location:" stormroot)
    (FileUtils/forceMkdir (File. stormroot))
    (FileUtils/cleanDirectory (File. stormroot))
    (setup-jar conf tmp-jar-location stormroot)
-   (FileUtils/writeByteArrayToFile (File. (master-stormcode-path stormroot)) (Utils/serialize topology))
-   (FileUtils/writeByteArrayToFile (File. (master-stormconf-path stormroot)) (Utils/toCompressedJsonConf storm-conf))
-   ))
+   (let [ [storm-conf topology] (AutoScalerManager/modifyConfigAndTopology storm-id storm-conf topology) ]
+     (system-topology! storm-conf topology)
+     (validate-topology-size storm-conf conf topology)
+     (FileUtils/writeByteArrayToFile (File. (master-stormcode-path stormroot)) (Utils/serialize topology))
+     (FileUtils/writeByteArrayToFile (File. (master-stormconf-path stormroot)) (Utils/toCompressedJsonConf storm-conf))
+   )))
 
 (defn- read-storm-topology [conf storm-id]
   (let [stormroot (master-stormdist-root conf storm-id)]
@@ -676,6 +770,7 @@
         topologies (Topologies. topologies)
         ;; read all the assignments
         assigned-topology-ids (.assignments storm-cluster-state nil)
+        
         existing-assignments (into {} (for [tid assigned-topology-ids]
                                         ;; for the topology which wants rebalance (specified by the scratch-topology-id)
                                         ;; we exclude its assignment, meaning that all the slots occupied by its assignment
@@ -1084,7 +1179,6 @@
                                 storm-conf
                                 (dissoc storm-conf STORM-ZOOKEEPER-TOPOLOGY-AUTH-SCHEME STORM-ZOOKEEPER-TOPOLOGY-AUTH-PAYLOAD))
                 total-storm-conf (merge conf storm-conf)
-                topology (AutoScalerManager/configureTopology storm-name storm-id uploadedJarLocation total-storm-conf topology)
                 topology (normalize-topology total-storm-conf topology)
 
                 storm-cluster-state (:storm-cluster-state nimbus)]
@@ -1106,6 +1200,7 @@
             (locking (:submit-lock nimbus)
               ;;cred-update-lock is not needed here because creds are being added for the first time.
               (.set-credentials! storm-cluster-state storm-id credentials storm-conf)
+              (AutoScalerManager/initializeAutoScaler storm-name storm-id total-storm-conf)
               (setup-storm-code conf storm-id uploadedJarLocation storm-conf topology)
               (.setup-heartbeats! storm-cluster-state storm-id)
               (let [thrift-status->kw-status {TopologyInitialStatus/INACTIVE :inactive
@@ -1150,6 +1245,17 @@
               (throw (InvalidTopologyException. "Number of executors must be greater than 0"))
               ))
           (transition-name! nimbus storm-name [:rebalance wait-amt num-workers executor-overrides] true)
+          ))
+
+      (^void bounce [this ^String storm-name ^BounceOptions options]
+        (check-storm-active! nimbus storm-name true)
+        (let [topology-conf (try-read-storm-conf-from-name conf storm-name nimbus)]
+          (check-authorization! nimbus storm-name topology-conf "bounce"))
+        (let [step1_wait-amt (if (.is_set_step1_wait_secs options)
+                               (.get_step1_wait_secs options))
+              step2_wait-amt (if (.is_set_step2_wait_secs options)
+                               (.get_step2_wait_secs options))]
+          (transition-name! nimbus storm-name [:bounce step1_wait-amt step2_wait-amt] true)
           ))
 
       (activate [this storm-name]

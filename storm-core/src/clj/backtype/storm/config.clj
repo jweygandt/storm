@@ -155,6 +155,14 @@
   [stormroot]
   (str stormroot file-path-separator "stormconf.ser"))
 
+(defn master-stormtopopersist-root
+  ([conf]
+   (str (master-local-dir conf) file-path-separator "stormtopopersist"))
+  ([conf storm-name]
+   (str (master-stormtopopersist-root conf) file-path-separator storm-name))
+  ([conf storm-name storm-id]
+   (str (master-stormtopopersist-root conf) file-path-separator storm-name file-path-separator storm-id)))
+
 (defn master-inbox
   [conf]
   (let [ret (str (master-local-dir conf) file-path-separator "inbox")]

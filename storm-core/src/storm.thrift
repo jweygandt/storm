@@ -232,6 +232,11 @@ struct RebalanceOptions {
   3: optional map<string, i32> num_executors;
 }
 
+struct BounceOptions {
+  1: optional i32 step1_wait_secs;
+  2: optional i32 step2_wait_secs;
+}
+
 struct Credentials {
   1: required map<string,string> creds;
 }
@@ -272,12 +277,14 @@ enum TopologyStatus {
     ACTIVE = 1,
     INACTIVE = 2,
     REBALANCING = 3,
-    KILLED = 4
+    KILLED = 4,
+    BOUNCING = 5
 }
 
 union TopologyActionOptions {
     1: optional KillOptions kill_options;
     2: optional RebalanceOptions rebalance_options;
+    3: optional BounceOptions bounce_options;
 }
 
 struct StormBase {
@@ -349,6 +356,7 @@ service Nimbus {
   void activate(1: string name) throws (1: NotAliveException e, 2: AuthorizationException aze);
   void deactivate(1: string name) throws (1: NotAliveException e, 2: AuthorizationException aze);
   void rebalance(1: string name, 2: RebalanceOptions options) throws (1: NotAliveException e, 2: InvalidTopologyException ite, 3: AuthorizationException aze);
+  void bounce(1: string name, 2: BounceOptions options) throws (1: NotAliveException e, 2: InvalidTopologyException ite, 3: AuthorizationException aze);
   void uploadNewCredentials(1: string name, 2: Credentials creds) throws (1: NotAliveException e, 2: InvalidTopologyException ite, 3: AuthorizationException aze);
 
   // need to add functions for asking about status of storms, what nodes they're running on, looking at task logs
