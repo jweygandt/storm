@@ -1313,6 +1313,11 @@ public class Config extends HashMap<String, Object> {
      */
     public static final String TOPOLOGY_AUTO_SCALER="topology.auto-scaler";
     public static final Object TOPOLOGY_AUTO_SCALER_SCHEMA = String.class;
+    
+    public static final String TOPOLOGY_AUTO_SCALER_TARGET_THROUGHPUT="topology.auto-scaler.target.tps";
+    public static final Object TOPOLOGY_AUTO_SCALER_TARGET_THROUGHPUT_SCHEMA = ConfigValidation.IntegerValidator;
+    
+   
 
     /**
      * The root directory in ZooKeeper for metadata about TransactionalSpouts.
