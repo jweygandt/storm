@@ -1,8 +1,26 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package backtype.storm.autoscale;
 
 import java.io.File;
 import java.util.Map;
 
+import backtype.storm.generated.InvalidTopologyException;
 import backtype.storm.generated.Nimbus;
 import backtype.storm.generated.Nimbus.Iface;
 import backtype.storm.generated.StormTopology;
@@ -31,16 +49,8 @@ public interface IAutoScaler {
 			return false;
 		};
 
-		// @Override
-		// public void startAutoScaler(Iface nimbus, File datadir, String
-		// stormName, String stormId,
-		// @SuppressWarnings("rawtypes") Map totalStormConf, StormTopology
-		// topology) {
-		// }
-		//
 		@Override
-		public void reLoadAndReStartAutoScaler(Iface nimbus, File datadir, String stormName, String stormId,
-				@SuppressWarnings("rawtypes") Map totalStormConf) {
+		public void reLoadAndReStartAutoScaler(Iface nimbus, File datadir, String stormName, String stormId) {
 		};
 
 		@Override
@@ -50,28 +60,6 @@ public interface IAutoScaler {
 		};
 	};
 
-	// /**
-	// * This will be called after the constructor and before any other methods.
-	// * The auto-scaler should, ideally restore its state, and start running,
-	// * probably in a background thread. If there is no state to restore, this
-	// * method may create an initial state.
-	// *
-	// * Since there is no stop method for Nimbus, the containing process may be
-	// * killed at any time, this class should persist its state whenever it
-	// * changes it.
-	// *
-	// * @param nimbus
-	// * @param datadir
-	// * @param stormName
-	// * @param stormId
-	// * @param totalStormConf
-	// * @param topology
-	// */
-	// void startAutoScaler(Nimbus.Iface nimbus, File datadir, String stormName,
-	// String stormId,
-	// @SuppressWarnings("rawtypes") Map totalStormConf, StormTopology
-	// topology);
-
 	/**
 	 * This is typically the result of Nimbus restarting and picking up
 	 * existing, running, topologies. There should be a state to restore from.
@@ -80,10 +68,8 @@ public interface IAutoScaler {
 	 * @param datadir
 	 * @param stormName
 	 * @param stormId
-	 * @param totalStormConf
 	 */
-	void reLoadAndReStartAutoScaler(Nimbus.Iface nimbus, File datadir, String stormName, String stormId,
-			@SuppressWarnings("rawtypes") Map totalStormConf);
+	void reLoadAndReStartAutoScaler(Nimbus.Iface nimbus, File datadir, String stormName, String stormId);
 
 	/**
 	 * This should shut down any activity for the stormId from the prior
@@ -101,7 +87,9 @@ public interface IAutoScaler {
 	 * @param stormConf
 	 * @param topology
 	 * @return
+	 * @throws InvalidTopologyException
 	 */
-	Object[] modifyConfigAndTopology(String stormId, @SuppressWarnings("rawtypes") Map stormConf, StormTopology topology);
+	Object[] modifyConfigAndTopology(String stormId, @SuppressWarnings("rawtypes") Map stormConf,
+			StormTopology topology) throws InvalidTopologyException;
 
 }

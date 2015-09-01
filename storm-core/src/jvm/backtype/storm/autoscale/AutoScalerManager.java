@@ -1,3 +1,20 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package backtype.storm.autoscale;
 
 import java.io.File;
@@ -19,6 +36,7 @@ import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 
 import backtype.storm.Config;
+import backtype.storm.generated.InvalidTopologyException;
 import backtype.storm.generated.Nimbus;
 import backtype.storm.generated.StormTopology;
 import backtype.storm.generated.TopologyInfo;
@@ -45,7 +63,8 @@ public class AutoScalerManager {
 	private static BiMap<String, String> nameToId = HashBiMap.create();
 
 	/**
-	 * @param nimbus A handle to the Nimbus.Iface for the running process.
+	 * @param nimbus
+	 *            A handle to the Nimbus.Iface for the running process.
 	 */
 	public static synchronized void setNimbus(Nimbus.Iface nimbus) {
 		_nimbus = nimbus;
@@ -82,7 +101,8 @@ public class AutoScalerManager {
 	 * @return
 	 */
 	@SuppressWarnings({ "rawtypes" })
-	public static synchronized Object[] modifyConfigAndTopology(String stormId, Map stormConf, StormTopology topology) {
+	public static synchronized Object[] modifyConfigAndTopology(String stormId, Map stormConf, StormTopology topology)
+			throws InvalidTopologyException {
 
 		if (hasAutoScalerById(stormId)) {
 			IAutoScaler autoScaler = autoScalersByName.get(nameToId.inverse().get(stormId));
@@ -229,7 +249,7 @@ public class AutoScalerManager {
 
 				try {
 					autoScaler = (IAutoScaler) Class.forName(autoScalerClassName).newInstance();
-					autoScaler.reLoadAndReStartAutoScaler(_nimbus, datadir, stormName, stormId, totalStormConf);
+					autoScaler.reLoadAndReStartAutoScaler(_nimbus, datadir, stormName, stormId);
 					autoScalersByName.put(stormName, autoScaler);
 					nameToId.put(stormName, stormId);
 				} catch (InstantiationException | IllegalAccessException | ClassNotFoundException e) {
@@ -239,7 +259,7 @@ public class AutoScalerManager {
 							e);
 				}
 			} else {
-				autoScaler.reLoadAndReStartAutoScaler(_nimbus, datadir, stormName, stormId, totalStormConf);
+				autoScaler.reLoadAndReStartAutoScaler(_nimbus, datadir, stormName, stormId);
 				nameToId.put(stormName, stormId);
 			}
 		}
